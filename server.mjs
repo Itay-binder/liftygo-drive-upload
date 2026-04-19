@@ -3,8 +3,11 @@
  * גוף JSON זהה ל־WordPress: customer_name, order_date, order_id?, files: [{ base64, filename, mime_type }]
  */
 import express from 'express';
+import { createReadStream } from 'node:fs';
+import fsp from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { google } from 'googleapis';
-import { Readable } from 'node:stream';
 
 const PORT = process.env.PORT || 8080;
 const DRIVE_ROOT_FOLDER_ID = (process.env.DRIVE_ROOT_FOLDER_ID || '').trim();
@@ -47,7 +50,11 @@ function getDriveClient() {
     credentials,
     scopes: ['https://www.googleapis.com/auth/drive'],
   });
-  return google.drive({ version: 'v3', auth });
+  return google.drive({
+    version: 'v3',
+    auth,
+    timeout: 120000,
+  });
 }
 
 function decodeBase64File(base64) {
@@ -200,16 +207,21 @@ app.post('/create-folder-and-upload', async (req, res) => {
       continue;
     }
 
+    const tmpPath = path.join(
+      os.tmpdir(),
+      `liftygo_${folderId.replace(/[^a-z0-9]/gi, '')}_${i}_${Date.now()}.bin`
+    );
     try {
+      await fsp.writeFile(tmpPath, buf);
+      const stream = createReadStream(tmpPath);
       const created = await drive.files.create({
         requestBody: {
           name: filename,
           parents: [folderId],
-          mimeType,
         },
         media: {
           mimeType,
-          body: Readable.from(buf),
+          body: stream,
         },
         fields: 'id',
         supportsAllDrives: true,
@@ -221,9 +233,13 @@ app.post('/create-folder-and-upload', async (req, res) => {
         file_url: `https://drive.google.com/file/d/${id}/view`,
       });
     } catch (e) {
-      console.error('[Drive] upload file', filename, e.message);
-      lastErr = { code: 'upload_failed', message: e.message };
-      uploadErrors.push({ index: i, filename, step: 'drive_api', message: e.message });
+      const apiDetail = e.response?.data ? JSON.stringify(e.response.data) : '';
+      const msg = apiDetail ? `${e.message} | ${apiDetail}` : e.message;
+      console.error('[Drive] upload file', filename, msg);
+      lastErr = { code: 'upload_failed', message: msg };
+      uploadErrors.push({ index: i, filename, step: 'drive_api', message: msg });
+    } finally {
+      await fsp.unlink(tmpPath).catch(() => {});
     }
   }
 
