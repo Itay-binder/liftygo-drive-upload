@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>שאלון הובלה – העלאה לדרייב</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./wizard.css" />
+  <!--
+    הגדרות: מומלץ לטעון מערכת ניהול / תבנית (לפני wizard.js) ולא לשמור סוד בקוד סטטי ציבורי לטווח ארוך.
+    לבדיקה מקומית החלף ערכים כאן:
+  -->
+  <script>
+    window.LIFTYGO_DRIVE_API_URL =
+      window.LIFTYGO_DRIVE_API_URL ||
+      'https://liftygo-drive-upload-163624355434.europe-west1.run.app/create-folder-and-upload';
+    window.LIFTYGO_UPLOAD_SECRET = window.LIFTYGO_UPLOAD_SECRET || '';
+    window.LIFTYGO_MAKE_WEBHOOK_URL =
+      window.LIFTYGO_MAKE_WEBHOOK_URL ||
+      'https://hook.us1.make.com/wgko3er3c8r5mz8vv9llqwjza49jedfm';
+  </script>
+</head>
+<body>
+  <main class="lw">
+    <header class="lw-head">
+      <h1>הובלה קטנה – פרטים ותמונות</h1>
+      <p class="lw-lead">
+        התמונות נשמרות בזיכרון בדפדפן ברגע הבחירה (לא רק בתצוגה מקדימה), ואז נשלחות לשרת כ־Base64.
+        אחרי פריסת תיקון ל־Cloud Run, ההעלאה לדרייב אמורה להסתיים עם <code>files_count &gt; 0</code>.
+      </p>
+    </header>
+
+    <div id="lwAlert" class="lw-alert" role="status" hidden></div>
+
+    <form id="lwForm" class="lw-card" novalidate>
+      <div class="lw-field">
+        <label for="lwName">שם מלא</label>
+        <input id="lwName" name="name" class="lw-input" required autocomplete="name" />
+      </div>
+      <div class="lw-field">
+        <label for="lwPhone">טלפון</label>
+        <input id="lwPhone" name="phone" class="lw-input" required inputmode="tel" autocomplete="tel" />
+      </div>
+      <div class="lw-field">
+        <label for="lwDate">תאריך להובלה</label>
+        <input id="lwDate" name="date" type="date" class="lw-input" required />
+      </div>
+
+      <section class="lw-items" aria-labelledby="lwItemsTitle">
+        <h2 id="lwItemsTitle">פריטים ותמונות</h2>
+        <p class="lw-hint">לכל פריט: שם, כמות, ותמונה (מומלץ). אפשר להוסיף שורות.</p>
+        <div id="lwRows"></div>
+        <button type="button" class="lw-btn lw-btn-ghost" id="lwAddRow">+ הוסף פריט</button>
+      </section>
+
+      <div class="lw-actions">
+        <button type="submit" class="lw-btn lw-btn-primary" id="lwSubmit">שליחה + יצירת תיקייה בדרייב</button>
+      </div>
+    </form>
+  </main>
+
+  <template id="lwRowTpl">
+    <div class="lw-row" data-lw-row>
+      <input type="text" class="lw-input lw-grow" data-item-name placeholder="שם פריט" required />
+      <select class="lw-input lw-qty" data-item-qty aria-label="כמות">
+        <option value="1">1</option>
+        <option value="2">2</option>
+        <option value="3">3</option>
+        <option value="4">4</option>
+        <option value="5">5</option>
+      </select>
+      <div class="lw-media">
+        <input type="file" accept="image/*" hidden data-item-file />
+        <button type="button" class="lw-btn lw-btn-ghost lw-pick" data-pick>תמונה</button>
+        <img class="lw-thumb" alt="" width="40" height="40" hidden data-thumb />
+      </div>
+      <button type="button" class="lw-btn lw-btn-danger lw-del" data-del aria-label="מחק שורה">✕</button>
+    </div>
+  </template>
+
+  <script src="./wizard.js" defer></script>
+</body>
+</html>

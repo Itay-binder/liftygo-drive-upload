@@ -3,6 +3,7 @@
  * גוף JSON זהה ל־WordPress: customer_name, order_date, order_id?, files: [{ base64, filename, mime_type }]
  */
 import express from 'express';
+import { Readable } from 'node:stream';
 import { google } from 'googleapis';
 
 const PORT = process.env.PORT || 8080;
@@ -60,9 +61,20 @@ function decodeBase64File(base64) {
     data = data.split(',', 2)[1];
   }
   data = data.replace(/\s+/g, '');
+  // URL-safe base64 from some clients
+  data = data.replace(/-/g, '+').replace(/_/g, '/');
+  const missing = (4 - (data.length % 4)) % 4;
+  if (missing) data += '='.repeat(missing);
   const buf = Buffer.from(data, 'base64');
   if (!buf.length) return null;
   return buf;
+}
+
+/** שמות קבצים בטוחים לדרייב (UTF-8 נשמר; תווים אסורים מוסרים) */
+function sanitizeDriveFilename(name) {
+  const base = (name || '').toString().trim() || 'file';
+  const cleaned = base.replace(/[/\\?%*:|"<>]/g, '_').replace(/\s+/g, ' ').trim();
+  return cleaned.slice(0, 200);
 }
 
 const app = express();
@@ -204,21 +216,23 @@ app.post('/create-folder-and-upload', async (req, res) => {
     }
 
     try {
+      const safeName = sanitizeDriveFilename(filename);
       const created = await drive.files.create({
         requestBody: {
-          name: filename,
+          name: safeName,
           parents: [folderId],
+          mimeType,
         },
         media: {
           mimeType,
-          body: buf,
+          body: Readable.from(buf),
         },
         fields: 'id',
         supportsAllDrives: true,
       });
       const id = created.data.id;
       uploaded.push({
-        filename,
+        filename: safeName,
         file_id: id,
         file_url: `https://drive.google.com/file/d/${id}/view`,
       });
