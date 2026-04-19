@@ -7,9 +7,26 @@ import { google } from 'googleapis';
 import { Readable } from 'node:stream';
 
 const PORT = process.env.PORT || 8080;
-const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID || '';
-const UPLOAD_SECRET = process.env.UPLOAD_SECRET || '';
-const SA_JSON = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '';
+const DRIVE_ROOT_FOLDER_ID = (process.env.DRIVE_ROOT_FOLDER_ID || '').trim();
+const UPLOAD_SECRET = (process.env.UPLOAD_SECRET || '').trim();
+
+function parseServiceAccountJson() {
+  let raw = (process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '').trim();
+  if (!raw) return null;
+  if (raw.startsWith('"')) {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
 
 function corsHeaders(req) {
   const origin = req.headers.origin || '*';
@@ -22,10 +39,10 @@ function corsHeaders(req) {
 }
 
 function getDriveClient() {
-  if (!SA_JSON) {
-    throw new Error('Missing GOOGLE_SERVICE_ACCOUNT_JSON');
+  const credentials = parseServiceAccountJson();
+  if (!credentials || typeof credentials !== 'object') {
+    throw new Error('Missing or invalid GOOGLE_SERVICE_ACCOUNT_JSON');
   }
-  const credentials = JSON.parse(SA_JSON);
   const auth = new google.auth.GoogleAuth({
     credentials,
     scopes: ['https://www.googleapis.com/auth/drive'],
@@ -46,7 +63,7 @@ function decodeBase64File(base64) {
 }
 
 const app = express();
-app.use(express.json({ limit: '32mb' }));
+app.use(express.json({ limit: '52mb' }));
 
 app.options('/create-folder-and-upload', (req, res) => {
   Object.entries(corsHeaders(req)).forEach(([k, v]) => res.setHeader(k, v));
@@ -56,7 +73,7 @@ app.options('/create-folder-and-upload', (req, res) => {
 app.post('/create-folder-and-upload', async (req, res) => {
   Object.entries(corsHeaders(req)).forEach(([k, v]) => res.setHeader(k, v));
 
-  const incomingSecret = req.get('x-liftygo-upload-secret') || '';
+  const incomingSecret = (req.get('x-liftygo-upload-secret') || '').trim();
   if (UPLOAD_SECRET && incomingSecret !== UPLOAD_SECRET) {
     return res.status(401).json({
       success: false,
@@ -98,10 +115,16 @@ app.post('/create-folder-and-upload', async (req, res) => {
     });
   }
 
+  const pickFileFields = (f) => ({
+    base64: f.base64 ?? f.Base64,
+    filename: (f.filename ?? f.fileName ?? '').toString().trim(),
+    mime_type: (f.mime_type ?? f.mimeType ?? 'application/octet-stream').toString().split(';')[0].trim(),
+  });
+
   const decodable = files.filter((f) => {
-    const fn = (f.filename || '').toString();
-    const buf = f.base64 ? decodeBase64File(f.base64) : null;
-    return !!(buf && fn);
+    const { base64, filename } = pickFileFields(f);
+    const buf = base64 ? decodeBase64File(base64) : null;
+    return !!(buf && filename);
   });
   if (decodable.length === 0) {
     return res.status(400).json({
@@ -163,9 +186,9 @@ app.post('/create-folder-and-upload', async (req, res) => {
   let lastErr = null;
 
   for (let i = 0; i < files.length; i++) {
-    const f = files[i];
-    const filename = (f.filename || '').toString();
-    const mimeType = (f.mime_type || 'application/octet-stream').toString();
+    const f = pickFileFields(files[i]);
+    const filename = f.filename;
+    const mimeType = f.mime_type || 'application/octet-stream';
     const buf = f.base64 ? decodeBase64File(f.base64) : null;
     if (!buf || !filename) {
       uploadErrors.push({
