@@ -10,6 +10,15 @@ const PORT = process.env.PORT || 8080;
 const DRIVE_ROOT_FOLDER_ID = (process.env.DRIVE_ROOT_FOLDER_ID || '').trim();
 const UPLOAD_SECRET = (process.env.UPLOAD_SECRET || '').trim();
 
+/** OAuth משתמש (Gmail) — פותר quota של SA בתוך My Drive של משתמש */
+const OAUTH_CLIENT_ID = (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim();
+const OAUTH_CLIENT_SECRET = (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim();
+const OAUTH_REFRESH_TOKEN = (process.env.GOOGLE_OAUTH_REFRESH_TOKEN || '').trim();
+
+function usesGmailUserOAuth() {
+  return Boolean(OAUTH_CLIENT_ID && OAUTH_CLIENT_SECRET && OAUTH_REFRESH_TOKEN);
+}
+
 function parseServiceAccountJson() {
   let raw = (process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '').trim();
   if (!raw) return null;
@@ -38,10 +47,26 @@ function corsHeaders(req) {
   };
 }
 
-function getDriveClient() {
+/**
+ * אם מוגדרים שלושת משתני ה־OAuth — משתמשים ב־Gmail (מכסת האחסון של המשתמש).
+ * אחרת — Service Account (מתאים ל־Shared drive וכו').
+ */
+async function getDriveClient() {
+  if (usesGmailUserOAuth()) {
+    const oauth2 = new google.auth.OAuth2(OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET);
+    oauth2.setCredentials({ refresh_token: OAUTH_REFRESH_TOKEN });
+    return google.drive({
+      version: 'v3',
+      auth: oauth2,
+      timeout: 120000,
+    });
+  }
+
   const credentials = parseServiceAccountJson();
   if (!credentials || typeof credentials !== 'object') {
-    throw new Error('Missing or invalid GOOGLE_SERVICE_ACCOUNT_JSON');
+    throw new Error(
+      'Missing Drive auth: set GOOGLE_SERVICE_ACCOUNT_JSON, or set all of GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_OAUTH_REFRESH_TOKEN (Gmail user).',
+    );
   }
   const auth = new google.auth.GoogleAuth({
     credentials,
@@ -155,7 +180,7 @@ app.post('/create-folder-and-upload', async (req, res) => {
 
   let drive;
   try {
-    drive = getDriveClient();
+    drive = await getDriveClient();
   } catch (e) {
     return res.status(500).json({
       success: false,
@@ -286,5 +311,6 @@ app.get('/health', (_req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Listening on ${PORT}`);
+  const mode = usesGmailUserOAuth() ? 'Gmail user OAuth' : 'Service Account JSON';
+  console.log(`Listening on ${PORT}; Drive auth: ${mode}`);
 });

@@ -18,16 +18,20 @@
      *"Service Accounts do not have storage quota … use shared drives or OAuth delegation"*.  
      זו מגבלה של גוגל: **ל־Service Account אין מכסת אחסון לקבצים בתוך ה־My Drive של משתמש רגיל**, גם אם שיתפת עורך.
    - **פתרון מומלץ (ארגון עם Google Workspace):** ליצור **Shared drive** (כונן משותף), להוסיף את ה־Service Account כחבר עם הרשאת **Content manager** (או מנהל), וליצור את תיקיית השורש **בתוך** אותו Shared drive. עדכן את `DRIVE_ROOT_FOLDER_ID` ל־ID של אותה תיקייה. השרת כבר שולח `supportsAllDrives: true` בקריאות Drive.
-   - **פתרון בלי Shared drive (למשל Gmail חינמי):** להעלות בשם המשתמש עם **OAuth** (משתמש אנושי מאשר פעם אחת, שומרים refresh token בשרת) — דורש שינוי קוד; אי אפשר לפתור רק בשיתוף תיקייה ל־SA.
+   - **פתרון בלי Shared drive (Gmail פרטי):** להגדיר ב־Cloud Run את משתני **OAuth משתמש** (ראו למטה). השרת ישתמש ב־refresh token של חשבון ה־Gmail — ההעלאות יורדו ממכסת הדרייב של אותו משתמש.
 4. אם כן משתמשים בתרחיש שבו שיתוף ל־SA מספיק (למשל Shared drive): **שתף** את התיקייה / את ה־Shared drive עם מייל ה־Service Account עם הרשאה מתאימה.
 
 ## משתני סביבה (Cloud Run)
 
 | משתנה | חובה | הסבר |
 |--------|------|------|
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | כן | מחרוזת JSON מלאה של קובץ ה־Service Account (ב־Secret Manager מומלץ) |
-| `DRIVE_ROOT_FOLDER_ID` | כן | מזהה תיקיית האב בדרייב (כמו בקונסטנטה ב־PHP) |
-| `UPLOAD_SECRET` | מומלץ | מחרוזת סודית; הדפדפן חייב לשלוח כותרת `X-Liftygo-Upload-Secret` עם אותו ערך |
+| `DRIVE_ROOT_FOLDER_ID` | כן | מזהה תיקיית האב בדרייב (אצל Gmail: תיקייה ב־My Drive של אותו משתמש שאישר OAuth) |
+| `UPLOAD_SECRET` | מומלץ | מחרוזת סודית; הדפדפן חייב כותרת `X-Liftygo-Upload-Secret` |
+| **אחת משתי קבוצות אימות** | | |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | אופציונלי* | JSON של Service Account — מתאים בעיקר ל־**Shared drive** |
+| `GOOGLE_OAUTH_CLIENT_ID` + `GOOGLE_OAUTH_CLIENT_SECRET` + `GOOGLE_OAUTH_REFRESH_TOKEN` | אופציונלי* | **Gmail / My Drive** — שלושתם יחד; כשהם מוגדרים השרת **מעדיף OAuth** ולא משתמש ב־SA |
+
+\* חובה **או** SA **או** שלושת משתני ה־OAuth (לא חייבים את שני הסוגים).
 
 ## פריסה (דוגמה)
 
@@ -86,7 +90,23 @@ curl -s https://YOUR-URL/health
 
 צריך להחזיר `{"ok":true}`.
 
+## Gmail פרטי — OAuth (refresh token)
+
+1. ב־**Google Cloud Console** (אותו פרויקט או פרויקט חדש): **APIs & Services → OAuth consent screen** — הגדרו (External מספיק לבדיקות; הוסיפו את כתובת ה־Gmail כ־Test user אם האפליקציה ב־Testing).
+2. **Credentials → Create credentials → OAuth client ID** — סוג **Web application** (או Desktop).  
+   אם משתמשים ב־[OAuth 2.0 Playground](https://developers.google.com/oauthplayground/) כדי להוציא refresh token: ב־**Authorized redirect URIs** של ה־OAuth client הוסיפו בדיוק:  
+   `https://developers.google.com/oauthplayground/redirect`
+3. הפעילו **Google Drive API** לפרויקט.
+4. ב־Playground: ⚙️ → *Use your own OAuth credentials* → הדביקו Client ID ו־Client Secret → בחרו scope:  
+   `https://www.googleapis.com/auth/drive`  
+   → *Authorize APIs* → התחברו עם ה־Gmail הרצוי → *Exchange authorization code for tokens* → העתיקו את **Refresh token**.
+5. ב־Cloud Run הוסיפו משתני סביבה (עדיף Secret Manager):  
+   `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REFRESH_TOKEN`.  
+   אפשר **להסיר** או להשאיר ריק את `GOOGLE_SERVICE_ACCOUNT_JSON` אם לא רוצים SA — כששלושת משתני ה־OAuth מלאים, השרת משתמש רק ב־OAuth.
+6. `DRIVE_ROOT_FOLDER_ID` — מזהה תיקייה ב־**My Drive של אותו Gmail** (למשל תיקיית "תמונות מהזמנות").
+
+בהפעלה, בלוגים יופיע: `Drive auth: Gmail user OAuth`.
+
 ## Service Account מול OAuth
 
-השירות כרגע משתמש ב־**Service Account** בלבד. לפי מדיניות Drive, **אין להסתמך על שיתוף תיקייה ב־My Drive של Gmail** כדי לאפשר העלאת קבצים ב־SA — זה בדיוק המצב שבו מופיעה השגיאה על quota.  
-אם אין לכם **Shared drive**, צפו להרחיב את השירות ל־**OAuth של משתמש** (אותו `liftygo.service@gmail.com` או אחר) לפעולות `files.create` עם מדיה.
+**SA** בלי Shared drive **לא** יכול להעלות קבצים ל־My Drive של Gmail (שגיאת quota). **OAuth משתמש** פותר את זה לגבי Gmail פרטי; **Shared drive** פותר לעסקים עם Workspace בלי לחשוף refresh token של משתמש.
