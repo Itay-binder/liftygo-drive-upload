@@ -3,10 +3,6 @@
  * גוף JSON זהה ל־WordPress: customer_name, order_date, order_id?, files: [{ base64, filename, mime_type }]
  */
 import express from 'express';
-import { createReadStream } from 'node:fs';
-import fsp from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import { google } from 'googleapis';
 
 const PORT = process.env.PORT || 8080;
@@ -207,13 +203,7 @@ app.post('/create-folder-and-upload', async (req, res) => {
       continue;
     }
 
-    const tmpPath = path.join(
-      os.tmpdir(),
-      `liftygo_${folderId.replace(/[^a-z0-9]/gi, '')}_${i}_${Date.now()}.bin`
-    );
     try {
-      await fsp.writeFile(tmpPath, buf);
-      const stream = createReadStream(tmpPath);
       const created = await drive.files.create({
         requestBody: {
           name: filename,
@@ -221,7 +211,7 @@ app.post('/create-folder-and-upload', async (req, res) => {
         },
         media: {
           mimeType,
-          body: stream,
+          body: buf,
         },
         fields: 'id',
         supportsAllDrives: true,
@@ -238,9 +228,28 @@ app.post('/create-folder-and-upload', async (req, res) => {
       console.error('[Drive] upload file', filename, msg);
       lastErr = { code: 'upload_failed', message: msg };
       uploadErrors.push({ index: i, filename, step: 'drive_api', message: msg });
-    } finally {
-      await fsp.unlink(tmpPath).catch(() => {});
     }
+  }
+
+  if (uploaded.length === 0) {
+    try {
+      await drive.files.update({
+        fileId: folderId,
+        requestBody: { trashed: true },
+        supportsAllDrives: true,
+      });
+      console.warn('[Drive] trashed empty folder (no file uploads succeeded)', folderId);
+    } catch (e) {
+      console.error('[Drive] failed to trash empty folder', folderId, e.message);
+    }
+    return res.status(500).json({
+      success: false,
+      error: 'upload_failed',
+      message: 'Folder was created but Drive did not accept any file upload. Check upload_errors and service account permissions on the parent folder.',
+      upload_error: lastErr,
+      upload_errors: uploadErrors.length ? uploadErrors : undefined,
+      files_attempted: files.length,
+    });
   }
 
   const folderUrl = `https://drive.google.com/drive/folders/${folderId}`;
@@ -253,8 +262,7 @@ app.post('/create-folder-and-upload', async (req, res) => {
     files_count: uploaded.length,
     files: uploaded,
     files_attempted: files.length,
-    upload_success: uploaded.length > 0,
-    upload_error: lastErr && uploaded.length === 0 ? lastErr : null,
+    upload_success: true,
     upload_errors: uploadErrors.length ? uploadErrors : undefined,
   });
 });

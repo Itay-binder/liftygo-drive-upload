@@ -1,0 +1,24 @@
+# Cloud Build: build image + deploy to Cloud Run (set a trigger on this repo in GCP).
+# Required IAM on the Cloud Build default SA: Artifact Registry / Storage + Cloud Run Admin + Service Account User.
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/liftygo-drive-upload:$BUILD_ID'
+      - '.'
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/liftygo-drive-upload:$BUILD_ID']
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'liftygo-drive-upload'
+      - '--image=gcr.io/$PROJECT_ID/liftygo-drive-upload:$BUILD_ID'
+      - '--region=europe-west1'
+      - '--platform=managed'
+      - '--quiet'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
