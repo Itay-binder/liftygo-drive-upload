@@ -56,7 +56,8 @@ app.options('/create-folder-and-upload', (req, res) => {
 app.post('/create-folder-and-upload', async (req, res) => {
   Object.entries(corsHeaders(req)).forEach(([k, v]) => res.setHeader(k, v));
 
-  if (UPLOAD_SECRET && req.headers['x-liftygo-upload-secret'] !== UPLOAD_SECRET) {
+  const incomingSecret = req.get('x-liftygo-upload-secret') || '';
+  if (UPLOAD_SECRET && incomingSecret !== UPLOAD_SECRET) {
     return res.status(401).json({
       success: false,
       error: 'unauthorized',
@@ -86,6 +87,31 @@ app.post('/create-folder-and-upload', async (req, res) => {
     });
   }
 
+  // בלי קבצים – לא יוצרים תיקייה ריקה (מונע בלבול כמו "תיקייה בלי תמונה")
+  if (files.length === 0) {
+    console.warn('[Drive] no files in body; keys:', Object.keys(body));
+    return res.status(400).json({
+      success: false,
+      error: 'no_files',
+      message: 'No files in request. Check that the browser sends a non-empty files array.',
+      hint: 'Open DevTools → Network → create-folder-and-upload → Payload and confirm files has objects with base64, filename, mime_type.',
+    });
+  }
+
+  const decodable = files.filter((f) => {
+    const fn = (f.filename || '').toString();
+    const buf = f.base64 ? decodeBase64File(f.base64) : null;
+    return !!(buf && fn);
+  });
+  if (decodable.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'no_valid_files',
+      message: 'files array present but nothing decoded (check base64, filename, mime_type).',
+      files_received: files.length,
+    });
+  }
+
   let folderName = `${customerName} - ${orderDate}`;
   if (orderId) folderName += ` - ${orderId}`;
 
@@ -109,6 +135,7 @@ app.post('/create-folder-and-upload', async (req, res) => {
         parents: [DRIVE_ROOT_FOLDER_ID],
       },
       fields: 'id',
+      supportsAllDrives: true,
     });
     folderId = folder.data.id;
   } catch (e) {
@@ -125,12 +152,14 @@ app.post('/create-folder-and-upload', async (req, res) => {
       fileId: folderId,
       requestBody: { type: 'anyone', role: 'reader' },
       fields: 'id',
+      supportsAllDrives: true,
     });
   } catch (e) {
     console.warn('[Drive] share folder failed (non-fatal):', e.message);
   }
 
   const uploaded = [];
+  const uploadErrors = [];
   let lastErr = null;
 
   for (let i = 0; i < files.length; i++) {
@@ -138,7 +167,15 @@ app.post('/create-folder-and-upload', async (req, res) => {
     const filename = (f.filename || '').toString();
     const mimeType = (f.mime_type || 'application/octet-stream').toString();
     const buf = f.base64 ? decodeBase64File(f.base64) : null;
-    if (!buf || !filename) continue;
+    if (!buf || !filename) {
+      uploadErrors.push({
+        index: i,
+        filename: filename || '(empty)',
+        step: 'decode_or_missing_fields',
+        message: !filename ? 'missing filename' : 'base64 decode failed or empty',
+      });
+      continue;
+    }
 
     try {
       const created = await drive.files.create({
@@ -152,6 +189,7 @@ app.post('/create-folder-and-upload', async (req, res) => {
           body: Readable.from(buf),
         },
         fields: 'id',
+        supportsAllDrives: true,
       });
       const id = created.data.id;
       uploaded.push({
@@ -162,6 +200,7 @@ app.post('/create-folder-and-upload', async (req, res) => {
     } catch (e) {
       console.error('[Drive] upload file', filename, e.message);
       lastErr = { code: 'upload_failed', message: e.message };
+      uploadErrors.push({ index: i, filename, step: 'drive_api', message: e.message });
     }
   }
 
@@ -177,6 +216,7 @@ app.post('/create-folder-and-upload', async (req, res) => {
     files_attempted: files.length,
     upload_success: uploaded.length > 0,
     upload_error: lastErr && uploaded.length === 0 ? lastErr : null,
+    upload_errors: uploadErrors.length ? uploadErrors : undefined,
   });
 });
 
