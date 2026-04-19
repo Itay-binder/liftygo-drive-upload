@@ -1,0 +1,189 @@
+/**
+ * העלאת תמונות לדרייב – Cloud Run (מחוץ לוורדפרס / Cloudflare).
+ * גוף JSON זהה ל־WordPress: customer_name, order_date, order_id?, files: [{ base64, filename, mime_type }]
+ */
+import express from 'express';
+import { google } from 'googleapis';
+import { Readable } from 'node:stream';
+
+const PORT = process.env.PORT || 8080;
+const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID || '';
+const UPLOAD_SECRET = process.env.UPLOAD_SECRET || '';
+const SA_JSON = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '';
+
+function corsHeaders(req) {
+  const origin = req.headers.origin || '*';
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Liftygo-Upload-Secret',
+    'Access-Control-Max-Age': '86400',
+  };
+}
+
+function getDriveClient() {
+  if (!SA_JSON) {
+    throw new Error('Missing GOOGLE_SERVICE_ACCOUNT_JSON');
+  }
+  const credentials = JSON.parse(SA_JSON);
+  const auth = new google.auth.GoogleAuth({
+    credentials,
+    scopes: ['https://www.googleapis.com/auth/drive'],
+  });
+  return google.drive({ version: 'v3', auth });
+}
+
+function decodeBase64File(base64) {
+  let data = base64;
+  if (typeof data !== 'string') return null;
+  if (data.includes(',')) {
+    data = data.split(',', 2)[1];
+  }
+  data = data.replace(/\s+/g, '');
+  const buf = Buffer.from(data, 'base64');
+  if (!buf.length) return null;
+  return buf;
+}
+
+const app = express();
+app.use(express.json({ limit: '32mb' }));
+
+app.options('/create-folder-and-upload', (req, res) => {
+  Object.entries(corsHeaders(req)).forEach(([k, v]) => res.setHeader(k, v));
+  res.status(204).end();
+});
+
+app.post('/create-folder-and-upload', async (req, res) => {
+  Object.entries(corsHeaders(req)).forEach(([k, v]) => res.setHeader(k, v));
+
+  if (UPLOAD_SECRET && req.headers['x-liftygo-upload-secret'] !== UPLOAD_SECRET) {
+    return res.status(401).json({
+      success: false,
+      error: 'unauthorized',
+      message: 'Invalid or missing X-Liftygo-Upload-Secret',
+    });
+  }
+
+  if (!DRIVE_ROOT_FOLDER_ID) {
+    return res.status(500).json({
+      success: false,
+      error: 'config',
+      message: 'Missing DRIVE_ROOT_FOLDER_ID',
+    });
+  }
+
+  const body = req.body || {};
+  const customerName = (body.customer_name || '').toString().trim();
+  const orderDate = (body.order_date || '').toString().trim();
+  const orderId = (body.order_id || '').toString().trim();
+  const files = Array.isArray(body.files) ? body.files : [];
+
+  if (!customerName || !orderDate) {
+    return res.status(400).json({
+      success: false,
+      error: 'missing_parameters',
+      message: 'customer_name and order_date required',
+    });
+  }
+
+  let folderName = `${customerName} - ${orderDate}`;
+  if (orderId) folderName += ` - ${orderId}`;
+
+  let drive;
+  try {
+    drive = getDriveClient();
+  } catch (e) {
+    return res.status(500).json({
+      success: false,
+      error: 'auth_config',
+      message: e.message || 'Drive auth failed',
+    });
+  }
+
+  let folderId;
+  try {
+    const folder = await drive.files.create({
+      requestBody: {
+        name: folderName,
+        mimeType: 'application/vnd.google-apps.folder',
+        parents: [DRIVE_ROOT_FOLDER_ID],
+      },
+      fields: 'id',
+    });
+    folderId = folder.data.id;
+  } catch (e) {
+    console.error('[Drive] create folder', e.message);
+    return res.status(500).json({
+      success: false,
+      error: 'folder_creation_failed',
+      message: e.message || 'Folder creation failed',
+    });
+  }
+
+  try {
+    await drive.permissions.create({
+      fileId: folderId,
+      requestBody: { type: 'anyone', role: 'reader' },
+      fields: 'id',
+    });
+  } catch (e) {
+    console.warn('[Drive] share folder failed (non-fatal):', e.message);
+  }
+
+  const uploaded = [];
+  let lastErr = null;
+
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    const filename = (f.filename || '').toString();
+    const mimeType = (f.mime_type || 'application/octet-stream').toString();
+    const buf = f.base64 ? decodeBase64File(f.base64) : null;
+    if (!buf || !filename) continue;
+
+    try {
+      const created = await drive.files.create({
+        requestBody: {
+          name: filename,
+          parents: [folderId],
+          mimeType,
+        },
+        media: {
+          mimeType,
+          body: Readable.from(buf),
+        },
+        fields: 'id',
+      });
+      const id = created.data.id;
+      uploaded.push({
+        filename,
+        file_id: id,
+        file_url: `https://drive.google.com/file/d/${id}/view`,
+      });
+    } catch (e) {
+      console.error('[Drive] upload file', filename, e.message);
+      lastErr = { code: 'upload_failed', message: e.message };
+    }
+  }
+
+  const folderUrl = `https://drive.google.com/drive/folders/${folderId}`;
+
+  return res.status(200).json({
+    success: true,
+    folder_id: folderId,
+    folder_name: folderName,
+    folder_url: folderUrl,
+    files_count: uploaded.length,
+    files: uploaded,
+    files_attempted: files.length,
+    upload_success: uploaded.length > 0,
+    upload_error: lastErr && uploaded.length === 0 ? lastErr : null,
+  });
+});
+
+app.get('/health', (_req, res) => {
+  res.json({ ok: true });
+});
+
+app.listen(PORT, () => {
+  console.log(`Listening on ${PORT}`);
+});
