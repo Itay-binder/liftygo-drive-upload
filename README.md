@@ -12,9 +12,14 @@
 
 1. **Google Cloud Project** + הפעלת **Cloud Run API**.
 2. **Service Account** עם תפקיד **Editor** על הפרויקט (או לפחות גישה לדרייב דרך scope – בפועל משתמשים ב־JSON של ה־SA).
-3. בתיקיית הדרייב הראשית (אותו `folder_id` כמו ב־`LIFTYGO_DRIVE_ROOT_FOLDER_ID` ב־PHP):  
-   **שתף את התיקייה** עם כתובת המייל של ה־Service Account (נראית כמו `xxx@yyy.iam.gserviceaccount.com`) עם הרשאה **עורך**.  
-   בלי זה יצירת תיקייה או העלאה ייכשלו.
+3. **איפה יושבת תיקיית השורש (`DRIVE_ROOT_FOLDER_ID`)** — זה הקריטי ביותר:
+   - **My Drive של משתמש Gmail רגיל** (תיקייה שבבעלות `...@gmail.com` ושיתפת עליה את ה־SA כעורך): יצירת תיקיית משנה לפעמים עובדת, אבל **העלאת קבצים (מדיה)** עלולה להיכשל עם  
+     `403` / `storageQuotaExceeded` —  
+     *"Service Accounts do not have storage quota … use shared drives or OAuth delegation"*.  
+     זו מגבלה של גוגל: **ל־Service Account אין מכסת אחסון לקבצים בתוך ה־My Drive של משתמש רגיל**, גם אם שיתפת עורך.
+   - **פתרון מומלץ (ארגון עם Google Workspace):** ליצור **Shared drive** (כונן משותף), להוסיף את ה־Service Account כחבר עם הרשאת **Content manager** (או מנהל), וליצור את תיקיית השורש **בתוך** אותו Shared drive. עדכן את `DRIVE_ROOT_FOLDER_ID` ל־ID של אותה תיקייה. השרת כבר שולח `supportsAllDrives: true` בקריאות Drive.
+   - **פתרון בלי Shared drive (למשל Gmail חינמי):** להעלות בשם המשתמש עם **OAuth** (משתמש אנושי מאשר פעם אחת, שומרים refresh token בשרת) — דורש שינוי קוד; אי אפשר לפתור רק בשיתוף תיקייה ל־SA.
+4. אם כן משתמשים בתרחיש שבו שיתוף ל־SA מספיק (למשל Shared drive): **שתף** את התיקייה / את ה־Shared drive עם מייל ה־Service Account עם הרשאה מתאימה.
 
 ## משתני סביבה (Cloud Run)
 
@@ -81,6 +86,7 @@ curl -s https://YOUR-URL/health
 
 צריך להחזיר `{"ok":true}`.
 
-## OAuth מול Service Account
+## Service Account מול OAuth
 
-השירות הזה משתמש ב־**Service Account** בלבד. אם בעבר השתמשת ב־OAuth משתמש ב־PHP בגלל מכסה – ב־SA התיקייה חייבת להיות תחת תיקייה ששותפה ל־SA (כמו למעלה). אם צריך שוב OAuth משתמש, אפשר להרחיב את השירות בעתיד.
+השירות כרגע משתמש ב־**Service Account** בלבד. לפי מדיניות Drive, **אין להסתמך על שיתוף תיקייה ב־My Drive של Gmail** כדי לאפשר העלאת קבצים ב־SA — זה בדיוק המצב שבו מופיעה השגיאה על quota.  
+אם אין לכם **Shared drive**, צפו להרחיב את השירות ל־**OAuth של משתמש** (אותו `liftygo.service@gmail.com` או אחר) לפעולות `files.create` עם מדיה.
